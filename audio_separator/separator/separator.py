@@ -9,6 +9,7 @@ import warnings
 import requests
 import torch
 import librosa
+import threading
 import pkg_resources
 import numpy as np
 import onnxruntime as ort
@@ -330,19 +331,28 @@ class Separator:
         )
 
     def separate(self, audio_file_path):
+        # Initialize thread-local variables at the beginning of the method
+        if not hasattr(self.thread_local_data, 'primary_source'):
+            self.thread_local_data.primary_source = None
+            self.thread_local_data.secondary_source = None
+            self.thread_local_data.audio_file_base = None
+            self.thread_local_data.primary_stem_path = None
+            self.thread_local_data.secondary_stem_path = None
+
         # Starting the separation process
         self.logger.info(f"Starting separation process for audio_file_path: {audio_file_path}")
-        self.separate_start_time = time.perf_counter()
+        separate_start_time = time.perf_counter()
 
-        self.primary_source = None
-        self.secondary_source = None
-
-        self.audio_file_path = audio_file_path
-        self.audio_file_base = os.path.splitext(os.path.basename(audio_file_path))[0]
+        # Set thread-local variables for this execution
+        self.thread_local_data.primary_source = None
+        self.thread_local_data.secondary_source = None
+        self.thread_local_data.audio_file_base = os.path.splitext(os.path.basename(audio_file_path))[0]
+        self.thread_local_data.primary_stem_path = self.primary_stem_path
+        self.thread_local_data.secondary_stem_path = self.secondary_stem_path
 
         # Prepare the mix for processing
         self.logger.debug("Preparing mix...")
-        mix = self.prepare_mix(self.audio_file_path)
+        mix = self.prepare_mix(audio_file_path)
 
         self.logger.debug("Normalizing mix before demixing...")
         mix = spec_utils.normalize(self.logger, wave=mix, max_peak=self.normalization_threshold)
@@ -350,79 +360,60 @@ class Separator:
         # Start the demixing process
         source = self.demix(mix)
 
-        # In UVR, the source is cached here if it's a vocal split model, but we're not supporting that yet
-
         # Initialize the list for output files
         output_files = []
         self.logger.debug("Processing output files...")
 
         # Normalize and transpose the primary source if it's not already an array
-        if not isinstance(self.primary_source, np.ndarray):
+        if not isinstance(self.thread_local_data.primary_source, np.ndarray):
             self.logger.debug("Normalizing primary source...")
-            self.primary_source = spec_utils.normalize(self.logger, wave=source, max_peak=self.normalization_threshold).T
+            self.thread_local_data.primary_source = spec_utils.normalize(self.logger, wave=source, max_peak=self.normalization_threshold).T
 
         # Process the secondary source if not already an array
-        if not isinstance(self.secondary_source, np.ndarray):
+        if not isinstance(self.thread_local_data.secondary_source, np.ndarray):
             self.logger.debug("Producing secondary source: demixing in match_mix mode")
             raw_mix = self.demix(mix, is_match_mix=True)
 
             if self.invert_using_spec:
                 self.logger.debug("Inverting secondary stem using spectogram as invert_using_spec is set to True")
-                self.secondary_source = spec_utils.invert_stem(raw_mix, source)
+                self.thread_local_data.secondary_source = spec_utils.invert_stem(raw_mix, source)
             else:
                 self.logger.debug("Inverting secondary stem by subtracting of transposed demixed stem from transposed original mix")
-                self.secondary_source = mix.T - source.T
+                self.thread_local_data.secondary_source = mix.T - source.T
 
         # Save and process the secondary stem if needed
         if not self.output_single_stem or self.output_single_stem.lower() == self.model_secondary_stem.lower():
             self.logger.info(f"Saving {self.model_secondary_stem} stem...")
-            if not self.secondary_stem_path:
-                self.secondary_stem_path = os.path.join(
-                    f"{self.audio_file_base}_({self.model_secondary_stem})_{self.model_name}.{self.output_format.lower()}"
-                )
-            self.secondary_source_map = self.final_process(
-                self.secondary_stem_path, self.secondary_source, self.model_secondary_stem, self.sample_rate
+            secondary_stem_path = self.thread_local_data.secondary_stem_path or os.path.join(
+                f"{self.thread_local_data.audio_file_base}_({self.model_secondary_stem})_{self.model_name}.{self.output_format.lower()}"
             )
-            output_files.append(self.secondary_stem_path)
+            self.final_process(
+                secondary_stem_path, self.thread_local_data.secondary_source, self.model_secondary_stem, self.sample_rate
+            )
+            output_files.append(secondary_stem_path)
 
         # Save and process the primary stem if needed
         if not self.output_single_stem or self.output_single_stem.lower() == self.model_primary_stem.lower():
             self.logger.info(f"Saving {self.model_primary_stem} stem...")
-            if not self.primary_stem_path:
-                self.primary_stem_path = os.path.join(
-                    f"{self.audio_file_base}_({self.model_primary_stem})_{self.model_name}.{self.output_format.lower()}"
-                )
-            if not isinstance(self.primary_source, np.ndarray):
-                self.primary_source = source.T
-            self.primary_source_map = self.final_process(
-                self.primary_stem_path, self.primary_source, self.model_primary_stem, self.sample_rate
+            primary_stem_path = self.thread_local_data.primary_stem_path or os.path.join(
+                f"{self.thread_local_data.audio_file_base}_({self.model_primary_stem})_{self.model_name}.{self.output_format.lower()}"
             )
-            output_files.append(self.primary_stem_path)
+            self.final_process(
+                primary_stem_path, self.thread_local_data.primary_source, self.model_primary_stem, self.sample_rate
+            )
+            output_files.append(primary_stem_path)
 
         # Clear GPU cache to free up memory
         self.clear_gpu_cache()
 
-        # TODO: In UVR, this is where the vocal split chain gets processed - see process_vocal_split_chain()
-
         # Log the completion of the separation process
         self.logger.debug("Separation process completed.")
         self.logger.info(
-            f'Separation duration: {time.strftime("%H:%M:%S", time.gmtime(int(time.perf_counter() - self.separate_start_time)))}'
+            f'Separation duration: {time.strftime("%H:%M:%S", time.gmtime(int(time.perf_counter() - separate_start_time)))}'
         )
 
-        # Unset the audio file to prevent accidental re-separation of the same file
-        self.logger.debug("Clearing audio file...")
-        self.audio_file_path = None
-        self.audio_file_base = None
-
-        # Unset more separation params to prevent accidentally re-using the wrong source files or output paths
-        self.logger.debug("Clearing sources and stems...")
-        self.primary_source = None
-        self.secondary_source = None
-        self.primary_stem_path = None
-        self.secondary_stem_path = None
-
         return output_files
+
 
     def write_audio(self, stem_path: str, stem_source, sample_rate, stem_name=None):
         self.logger.debug(f"Entering write_audio with stem_name: {stem_name} and stem_path: {stem_path}")
@@ -740,3 +731,4 @@ class Separator:
         # Final log indicating successful preparation of the mix
         self.logger.debug("Mix preparation completed.")
         return mix
+
