@@ -617,10 +617,13 @@ class Separator:
             mix_part_ = mixture[:, start:end]
             if end != i + chunk_size:
                 pad_size = (i + chunk_size) - end
-                mix_part_ = np.concatenate((mix_part_, np.zeros((2, pad_size), dtype="float32")), axis=-1)
-
+                # Optimize padding
+                if pad_size > 0:
+                    mix_part_ = np.pad(mix_part_, ((0, 0), (0, pad_size)), mode='constant')
+            
             # Converts the chunk to a tensor for processing.
-            mix_part = torch.tensor([mix_part_], dtype=torch.float32).to(self.device)
+            mix_part = torch.from_numpy(mix_part_).float().to(self.device)
+
             # Splits the chunk into smaller batches if necessary.
             mix_waves = mix_part.split(self.batch_size)
             total_batches = len(mix_waves)
