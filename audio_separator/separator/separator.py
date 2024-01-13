@@ -355,8 +355,8 @@ class Separator:
         self.logger.debug("Preparing mix...")
         mix = self.prepare_mix(audio_file_path)
 
-        self.logger.debug("Normalizing mix before demixing...")
-        mix = spec_utils.normalize(self.logger, wave=mix, max_peak=self.normalization_threshold)
+        #self.logger.debug("Normalizing mix before demixing...")
+        #mix = spec_utils.normalize(self.logger, wave=mix, max_peak=self.normalization_threshold)
 
         # Start the demixing process
         source = self.demix(mix)
