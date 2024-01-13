@@ -332,7 +332,7 @@ class Separator:
             f'Load model duration: {time.strftime("%H:%M:%S", time.gmtime(int(time.perf_counter() - self.load_model_start_time)))}'
         )
 
-    def separate(self, audio_file_path):
+    def separate(self, audio_file_path, output_stem=None):
         # Initialize thread-local variables at the beginning of the method
         if not hasattr(self.thread_local_data, 'primary_source'):
             self.thread_local_data.primary_source = None
@@ -355,9 +355,6 @@ class Separator:
         # Prepare the mix for processing
         self.logger.debug("Preparing mix...")
         mix = self.prepare_mix(audio_file_path)
-
-        #self.logger.debug("Normalizing mix before demixing...")
-        #mix = spec_utils.normalize(self.logger, wave=mix, max_peak=self.normalization_threshold)
 
         # Start the demixing process
         source = self.demix(mix)
@@ -383,8 +380,11 @@ class Separator:
                 self.logger.debug("Inverting secondary stem by subtracting of transposed demixed stem from transposed original mix")
                 self.thread_local_data.secondary_source = mix.T - source.T
 
+        # Use the provided output_stem if specified, otherwise fallback to the instance attribute
+        output_stem_to_use = output_stem if output_stem else self.output_single_stem
+
         # Save and process the secondary stem if needed
-        if not self.output_single_stem or self.output_single_stem.lower() == self.model_secondary_stem.lower():
+        if not output_stem_to_use or output_stem_to_use.lower() == self.model_secondary_stem.lower():
             self.logger.info(f"Saving {self.model_secondary_stem} stem...")
             secondary_stem_path = self.thread_local_data.secondary_stem_path or os.path.join(
                 f"{self.thread_local_data.audio_file_base}_({self.model_secondary_stem})_{self.model_name}.{self.output_format.lower()}"
@@ -395,7 +395,7 @@ class Separator:
             output_files.append(secondary_stem_path)
 
         # Save and process the primary stem if needed
-        if not self.output_single_stem or self.output_single_stem.lower() == self.model_primary_stem.lower():
+        if not output_stem_to_use or output_stem_to_use.lower() == self.model_primary_stem.lower():
             self.logger.info(f"Saving {self.model_primary_stem} stem...")
             primary_stem_path = self.thread_local_data.primary_stem_path or os.path.join(
                 f"{self.thread_local_data.audio_file_base}_({self.model_primary_stem})_{self.model_name}.{self.output_format.lower()}"
