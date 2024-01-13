@@ -10,10 +10,10 @@ import requests
 import torch
 import librosa
 import threading
-import soundfile as sf
 import pkg_resources
 import numpy as np
 import onnxruntime as ort
+import soundfile as sf
 from onnx2torch import convert
 from pydub import AudioSegment
 from audio_separator.separator import spec_utils
@@ -619,11 +619,8 @@ class Separator:
                 pad_size = (i + chunk_size) - end
                 mix_part_ = np.concatenate((mix_part_, np.zeros((2, pad_size), dtype="float32")), axis=-1)
 
-            # Checking if conversion and transfer are necessary
-            if not isinstance(mix_part_, torch.Tensor):
-                mix_part = torch.tensor([mix_part_], dtype=torch.float32)
-            if mix_part.device != self.device:
-                mix_part = mix_part.to(self.device)
+            # Converts the chunk to a tensor for processing.
+            mix_part = torch.tensor([mix_part_], dtype=torch.float32).to(self.device)
             # Splits the chunk into smaller batches if necessary.
             mix_waves = mix_part.split(self.batch_size)
             total_batches = len(mix_waves)
@@ -709,18 +706,18 @@ class Separator:
 
         # Check if the input is a file path (string) and needs to be loaded
         if not isinstance(mix, np.ndarray):
-            self.logger.debug(f"Loading audio from file using sf: {mix}")
+            self.logger.debug(f"Loading audio from file: {mix}")
+
+            # Load audio with soundfile
             mix, orig_sr = sf.read(mix, always_2d=True)
             mix = mix.T  # Transpose to match expected shape
 
-        # Check if resampling is needed
-        if orig_sr != self.sample_rate:
-            self.logger.debug(f"Resampling from {orig_sr} to {self.sample_rate}")
-            mix = librosa.resample(mix, orig_sr=orig_sr, target_sr=self.sample_rate)
-        else:
-            self.logger.debug("Original sample rate matches target, resampling skipped.")
+            # Resample only if the original sample rate is different from the target sample rate
+            if orig_sr != self.sample_rate:
+                self.logger.debug(f"Resampling from {orig_sr} to {self.sample_rate}")
+                mix = librosa.resample(mix, orig_sr=orig_sr, target_sr=self.sample_rate)
 
-        self.logger.debug(f"Audio loaded. Sample rate: {self.sample_rate}, Audio shape: {mix.shape}")
+            self.logger.debug(f"Audio loaded. Sample rate: {self.sample_rate}, Audio shape: {mix.shape}")
         else:
             # Transpose the mix if it's already an ndarray (expected shape: [channels, samples])
             self.logger.debug("Transposing the provided mix array.")
