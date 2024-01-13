@@ -40,6 +40,7 @@ class Separator:
         overlap=0.25,
         batch_size=1,
     ):
+        self.thread_local_data = threading.local()
         self.logger = logging.getLogger(__name__)
         self.logger.setLevel(log_level)
         self.log_level = log_level
